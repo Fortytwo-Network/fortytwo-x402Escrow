@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  foundry:
+    name: Foundry Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Install Dependencies
+        run: |
+          forge install --no-git foundry-rs/forge-std@rev=0844d7e1fc5e60d77b68e469bff60265f236c398
+          forge install --no-git OpenZeppelin/openzeppelin-contracts@rev=5fd1781b1454fd1ef8e722282f86f9293cacf256
+          forge install --no-git OpenZeppelin/openzeppelin-contracts-upgradeable@rev=7bf4727aacdbfaa0f36cbd664654d0c9e1dc52bf
+
+      - name: Check Formatting
+        run: forge fmt --check
+
+      - name: Build
+        run: forge build
+
+      - name: Test
+        run: forge test --offline --match-path test/X402Escrow.t.sol -vv
+
+      - name: Gas Snapshot Check
+        run: forge snapshot --offline --match-path test/X402Escrow.t.sol --check

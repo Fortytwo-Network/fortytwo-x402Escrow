@@ -1,0 +1,18 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+solc_version = "0.8.28"
+remappings = [
+    "forge-std/=lib/forge-std/src/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/"
+]
+
+[rpc_endpoints]
+base          = "https://mainnet.base.org"
+base_sepolia  = "https://base-sepolia.drpc.org"
+monad         = "https://rpc.monad.xyz"
+monad_testnet = "https://testnet-rpc.monad.xyz"
