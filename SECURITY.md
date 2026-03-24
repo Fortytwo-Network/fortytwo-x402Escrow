@@ -1,6 +1,6 @@
 # Security Policy
 
-## Supported Version
+## Supported Versions
 
 Security fixes are applied to the latest `main` branch.
 
@@ -15,7 +15,7 @@ Include:
 
 1. Affected contract/function.
 2. Reproduction steps or PoC.
-3. Impact assessment (fund loss, stuck funds, privilege escalation, etc.).
-4. Suggested remediation if available.
+3. Impact assessment (e.g., fund loss, stuck funds, privilege escalation, etc.).
+4. Suggested remediation, if available.
 
-You will receive acknowledgement as quickly as possible, and we will coordinate disclosure timing after a fix is prepared.
+You will receive an acknowledgement as quickly as possible, and we will coordinate disclosure timing after a fix is prepared.

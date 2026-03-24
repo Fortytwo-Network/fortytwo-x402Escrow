@@ -21,4 +21,4 @@ We are committed to a respectful, harassment-free, and collaborative environment
 Project maintainers may remove comments, issues, or contributions that violate this code of conduct.
 
 For reports, contact:
-- `aivashov@fortytwo.network`
+- `support@fortytwo.network`
