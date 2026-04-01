@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.34;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {X402Escrow} from "../src/X402Escrow.sol";
 
 /// @dev Mock USDC that supports receiveWithAuthorization (EIP-3009)
@@ -73,10 +72,10 @@ contract FeeOnTransferUSDC {
     }
 }
 
-/// @dev Minimal V2 implementation for upgrade test
-contract X402EscrowV2 is X402Escrow {
-    function version() external pure returns (uint256) {
-        return 2;
+/// @dev Minimal V3 mock for upgrade test
+contract X402EscrowV3Mock is X402Escrow {
+    function v3Version() external pure returns (uint256) {
+        return 3;
     }
 }
 
@@ -85,129 +84,231 @@ contract X402EscrowTest is Test {
     MockUSDC public usdc;
 
     address facilitator = address(0xBEEF);
-    address admin = address(0xAD01);
     address owner = address(0x0123);
     address client = address(0xC0FE);
 
-    bytes32 constant FACILITATOR_ROLE = keccak256("FACILITATOR_ROLE");
-    bytes32 constant DEFAULT_ADMIN_ROLE = 0x00;
+    bytes32 constant NONCE_TAG = keccak256("X402_ESCROW_FACILITATOR_NONCE_V1");
 
     uint256 constant ONE_USDC = 1_000_000;
+    uint256 constant DEFAULT_TIMEOUT = 3600;
 
     function setUp() public {
         usdc = new MockUSDC();
 
-        // Deploy implementation + proxy
         X402Escrow impl = new X402Escrow();
-        bytes memory initData = abi.encodeCall(X402Escrow.initialize, (address(usdc), facilitator, admin, owner));
+        bytes memory initData = abi.encodeCall(X402Escrow.initialize, (address(usdc), owner));
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         escrow = X402Escrow(address(proxy));
 
-        // Fund client with 100 USDC
         usdc.mint(client, 100 * ONE_USDC);
+    }
+
+    // ─── helpers ─────────────────────────────────────────────
+
+    function _computeNonce(address fac, uint256 timeout, bytes32 salt) internal view returns (bytes32) {
+        return keccak256(abi.encode(NONCE_TAG, block.chainid, address(escrow), fac, timeout, salt));
+    }
+
+    function _createEscrow(uint256 amount, bytes32 salt) internal returns (bytes32) {
+        bytes32 nonce = _computeNonce(facilitator, DEFAULT_TIMEOUT, salt);
+        vm.prank(facilitator);
+        return escrow.settle(
+            client, amount, 0, block.timestamp + 7200, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
+    }
+
+    function _createEscrowWithTimeout(uint256 amount, bytes32 salt, uint256 timeout) internal returns (bytes32) {
+        bytes32 nonce = _computeNonce(facilitator, timeout, salt);
+        vm.prank(facilitator);
+        return escrow.settle(
+            client, amount, 0, block.timestamp + 7200, timeout, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
     }
 
     // ─── initialize ─────────────────────────────────────────
 
     function test_initialize_setsState() public view {
         assertEq(escrow.usdc(), address(usdc));
-        assertEq(escrow.timeoutSecs(), 5400);
         assertEq(escrow.owner(), owner);
-        assertTrue(escrow.hasRole(DEFAULT_ADMIN_ROLE, admin));
-        assertTrue(escrow.hasRole(FACILITATOR_ROLE, facilitator));
     }
 
     function test_initialize_cannotBeCalledTwice() public {
         vm.expectRevert();
-        escrow.initialize(address(usdc), facilitator, admin, owner);
+        escrow.initialize(address(usdc), owner);
     }
 
     function test_initialize_reverts_zeroUsdc() public {
         X402Escrow impl = new X402Escrow();
         vm.expectRevert(X402Escrow.ZeroAddress.selector);
-        new ERC1967Proxy(address(impl), abi.encodeCall(X402Escrow.initialize, (address(0), facilitator, admin, owner)));
+        new ERC1967Proxy(address(impl), abi.encodeCall(X402Escrow.initialize, (address(0), owner)));
     }
 
     function test_initialize_reverts_eoaUsdc() public {
         X402Escrow impl = new X402Escrow();
         vm.expectRevert(X402Escrow.NotContract.selector);
-        new ERC1967Proxy(
-            address(impl), abi.encodeCall(X402Escrow.initialize, (address(0xDEAD), facilitator, admin, owner))
-        );
-    }
-
-    function test_initialize_reverts_zeroFacilitator() public {
-        X402Escrow impl = new X402Escrow();
-        vm.expectRevert(X402Escrow.ZeroAddress.selector);
-        new ERC1967Proxy(
-            address(impl), abi.encodeCall(X402Escrow.initialize, (address(usdc), address(0), admin, owner))
-        );
-    }
-
-    function test_initialize_reverts_zeroAdmin() public {
-        X402Escrow impl = new X402Escrow();
-        vm.expectRevert(X402Escrow.ZeroAddress.selector);
-        new ERC1967Proxy(
-            address(impl), abi.encodeCall(X402Escrow.initialize, (address(usdc), facilitator, address(0), owner))
-        );
+        new ERC1967Proxy(address(impl), abi.encodeCall(X402Escrow.initialize, (address(0xDEAD), owner)));
     }
 
     function test_initialize_reverts_zeroOwner() public {
         X402Escrow impl = new X402Escrow();
         vm.expectRevert(X402Escrow.ZeroAddress.selector);
-        new ERC1967Proxy(
-            address(impl), abi.encodeCall(X402Escrow.initialize, (address(usdc), facilitator, admin, address(0)))
-        );
+        new ERC1967Proxy(address(impl), abi.encodeCall(X402Escrow.initialize, (address(usdc), address(0))));
     }
 
-    // ─── settle ──────────────────────────────────────────────
+    // ─── settle: success ────────────────────────────────────
 
     function test_settle_success() public {
         uint256 amount = 10 * ONE_USDC;
-        bytes32 nonce = keccak256("nonce1");
+        bytes32 salt = keccak256("salt1");
+        bytes32 nonce = _computeNonce(facilitator, DEFAULT_TIMEOUT, salt);
 
         vm.prank(facilitator);
-        bytes32 escrowId = escrow.settle(client, amount, 0, block.timestamp + 3600, nonce, 0, bytes32(0), bytes32(0));
+        bytes32 escrowId = escrow.settle(
+            client, amount, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
 
         X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
 
         assertEq(v.client, client);
         assertEq(v.amount, amount);
-        assertEq(v.refundAt, block.timestamp + 5400);
+        assertEq(v.refundAt, block.timestamp + DEFAULT_TIMEOUT);
         assertFalse(v.canRefund);
-        assertEq(v.timeUntilRefund, 5400);
+        assertEq(v.timeUntilRefund, DEFAULT_TIMEOUT);
         assertEq(usdc.balanceOf(address(escrow)), amount);
     }
 
-    function test_settle_reverts_notFacilitator() public {
-        vm.prank(client);
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, client, FACILITATOR_ROLE)
+    function test_settle_anyAddressCanSettle() public {
+        address anyFacilitator = address(0xFAC1);
+        usdc.mint(client, 10 * ONE_USDC);
+        bytes32 salt = keccak256("anysettle");
+        bytes32 nonce = _computeNonce(anyFacilitator, DEFAULT_TIMEOUT, salt);
+
+        vm.prank(anyFacilitator);
+        bytes32 escrowId = escrow.settle(
+            client, ONE_USDC, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
         );
-        escrow.settle(client, ONE_USDC, 0, block.timestamp + 3600, bytes32(0), 0, bytes32(0), bytes32(0));
+
+        X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
+        assertEq(v.client, client);
+        assertEq(v.amount, ONE_USDC);
     }
 
+    function test_settle_perEscrowTimeout() public {
+        bytes32 salt = keccak256("timeout_test");
+        uint256 customTimeout = 600;
+        bytes32 nonce = _computeNonce(facilitator, customTimeout, salt);
+
+        vm.prank(facilitator);
+        bytes32 escrowId = escrow.settle(
+            client, ONE_USDC, 0, block.timestamp + 3600, customTimeout, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
+
+        X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
+        assertEq(v.refundAt, block.timestamp + customTimeout);
+        assertEq(v.timeUntilRefund, customTimeout);
+    }
+
+    // ─── settle: nonce-binding reverts ───────────────────────
+
+    function test_settle_reverts_wrongSalt() public {
+        bytes32 salt = keccak256("real_salt");
+        bytes32 wrongSalt = keccak256("wrong_salt");
+        bytes32 nonce = _computeNonce(facilitator, DEFAULT_TIMEOUT, salt);
+
+        vm.prank(facilitator);
+        vm.expectRevert(X402Escrow.InvalidFacilitatorNonce.selector);
+        escrow.settle(
+            client, ONE_USDC, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, wrongSalt, 0, bytes32(0), bytes32(0)
+        );
+    }
+
+    function test_settle_reverts_differentSender() public {
+        bytes32 salt = keccak256("frontrun");
+        bytes32 nonce = _computeNonce(facilitator, DEFAULT_TIMEOUT, salt);
+        address attacker = address(0xBAD);
+
+        vm.prank(attacker);
+        vm.expectRevert(X402Escrow.InvalidFacilitatorNonce.selector);
+        escrow.settle(
+            client, ONE_USDC, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
+    }
+
+    function test_settle_reverts_timeoutTooLow() public {
+        bytes32 salt = keccak256("low_timeout");
+        uint256 tooLow = 299;
+        bytes32 nonce = _computeNonce(facilitator, tooLow, salt);
+
+        vm.prank(facilitator);
+        vm.expectRevert(X402Escrow.InvalidTimeout.selector);
+        escrow.settle(
+            client, ONE_USDC, 0, block.timestamp + 3600, tooLow, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
+    }
+
+    function test_settle_reverts_timeoutTooHigh() public {
+        bytes32 salt = keccak256("high_timeout");
+        uint256 tooHigh = 172_801;
+        bytes32 nonce = _computeNonce(facilitator, tooHigh, salt);
+
+        vm.prank(facilitator);
+        vm.expectRevert(X402Escrow.InvalidTimeout.selector);
+        escrow.settle(
+            client, ONE_USDC, 0, block.timestamp + 3600, tooHigh, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
+    }
+
+    function test_settle_timeoutAtMaxBoundary() public {
+        bytes32 salt = keccak256("max_boundary");
+        bytes32 nonce = _computeNonce(facilitator, 172_800, salt);
+
+        vm.prank(facilitator);
+        bytes32 escrowId = escrow.settle(
+            client, ONE_USDC, 0, block.timestamp + 3600, 172_800, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
+
+        X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
+        assertEq(v.refundAt, block.timestamp + 172_800);
+    }
+
+    // ─── settle: existing reverts ────────────────────────────
+
     function test_settle_reverts_zeroAmount() public {
+        bytes32 salt = keccak256("zero_amt");
+        bytes32 nonce = _computeNonce(facilitator, DEFAULT_TIMEOUT, salt);
+
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.InvalidAmount.selector);
-        escrow.settle(client, 0, 0, block.timestamp + 3600, bytes32(0), 0, bytes32(0), bytes32(0));
+        escrow.settle(
+            client, 0, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
     }
 
     function test_settle_reverts_expired() public {
+        bytes32 salt = keccak256("expired");
+        bytes32 nonce = _computeNonce(facilitator, DEFAULT_TIMEOUT, salt);
+
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.TimeoutExpired.selector);
-        escrow.settle(client, ONE_USDC, 0, block.timestamp - 1, bytes32(0), 0, bytes32(0), bytes32(0));
+        escrow.settle(
+            client, ONE_USDC, 0, block.timestamp - 1, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
     }
 
     function test_settle_reverts_notYetValid() public {
+        bytes32 salt = keccak256("notyet");
+        bytes32 nonce = _computeNonce(facilitator, DEFAULT_TIMEOUT, salt);
+
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.NotYetValid.selector);
         escrow.settle(
             client,
             ONE_USDC,
-            block.timestamp + 100, // validAfter in the future
+            block.timestamp + 100,
             block.timestamp + 3600,
-            keccak256("notyet"),
+            DEFAULT_TIMEOUT,
+            nonce,
+            salt,
             0,
             bytes32(0),
             bytes32(0)
@@ -217,60 +318,66 @@ contract X402EscrowTest is Test {
     function test_settle_reverts_amountExceedsUint56() public {
         uint256 tooMuch = uint256(type(uint56).max) + 1;
         usdc.mint(client, tooMuch);
+        bytes32 salt = keccak256("big");
+        bytes32 nonce = _computeNonce(facilitator, DEFAULT_TIMEOUT, salt);
 
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.InvalidAmount.selector);
-        escrow.settle(client, tooMuch, 0, block.timestamp + 3600, keccak256("big"), 0, bytes32(0), bytes32(0));
+        escrow.settle(
+            client, tooMuch, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
     }
 
     function test_settle_reverts_escrowAlreadyExists() public {
-        bytes32 nonce = keccak256("duplicate");
-        vm.prank(facilitator);
-        escrow.settle(client, ONE_USDC, 0, block.timestamp + 3600, nonce, 0, bytes32(0), bytes32(0));
+        bytes32 salt = keccak256("duplicate");
+        _createEscrow(ONE_USDC, salt);
 
-        // Same client + nonce → same escrowId → revert
-        // (MockUSDC also blocks reused nonce, but EscrowAlreadyExists fires first)
+        bytes32 nonce = _computeNonce(facilitator, DEFAULT_TIMEOUT, salt);
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.EscrowAlreadyExists.selector);
-        escrow.settle(client, ONE_USDC, 0, block.timestamp + 3600, nonce, 0, bytes32(0), bytes32(0));
+        escrow.settle(
+            client, ONE_USDC, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
     }
 
     function test_settle_reverts_transferMismatch() public {
-        // Deploy escrow with fee-on-transfer token
         FeeOnTransferUSDC feeToken = new FeeOnTransferUSDC();
         X402Escrow impl = new X402Escrow();
-        bytes memory initData = abi.encodeCall(X402Escrow.initialize, (address(feeToken), facilitator, admin, owner));
+        bytes memory initData = abi.encodeCall(X402Escrow.initialize, (address(feeToken), owner));
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         X402Escrow feeEscrow = X402Escrow(address(proxy));
 
         feeToken.mint(client, 100 * ONE_USDC);
 
+        bytes32 salt = keccak256("fee");
+        bytes32 nonce =
+            keccak256(abi.encode(NONCE_TAG, block.chainid, address(feeEscrow), facilitator, DEFAULT_TIMEOUT, salt));
+
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.TransferMismatch.selector);
-        feeEscrow.settle(client, 10 * ONE_USDC, 0, block.timestamp + 3600, keccak256("fee"), 0, bytes32(0), bytes32(0));
+        feeEscrow.settle(
+            client, 10 * ONE_USDC, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
+        );
     }
 
-    // ─── release ─────────────────────────────────────────────
+    // ─── release: success ───────────────────────────────────
 
     function test_release_partial() public {
         uint256 amount = 10 * ONE_USDC;
         uint256 facilitatorTake = 7 * ONE_USDC;
-        bytes32 nonce = keccak256("nonce2");
+        bytes32 salt = keccak256("release_partial");
 
-        vm.prank(facilitator);
-        bytes32 escrowId = escrow.settle(client, amount, 0, block.timestamp + 3600, nonce, 0, bytes32(0), bytes32(0));
+        bytes32 escrowId = _createEscrow(amount, salt);
 
         uint256 facilitatorBefore = usdc.balanceOf(facilitator);
         uint256 clientBefore = usdc.balanceOf(client);
 
         vm.prank(facilitator);
-        escrow.release(escrowId, facilitatorTake);
+        escrow.release(escrowId, facilitatorTake, DEFAULT_TIMEOUT, salt);
 
-        // Payment goes to msg.sender (facilitator)
         assertEq(usdc.balanceOf(facilitator), facilitatorBefore + facilitatorTake);
         assertEq(usdc.balanceOf(client), clientBefore + (amount - facilitatorTake));
 
-        // Storage cleared after release
         X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
         assertEq(v.client, address(0));
         assertEq(v.amount, 0);
@@ -278,76 +385,91 @@ contract X402EscrowTest is Test {
 
     function test_release_full() public {
         uint256 amount = 5 * ONE_USDC;
-        bytes32 nonce = keccak256("nonce3");
+        bytes32 salt = keccak256("release_full");
 
-        vm.prank(facilitator);
-        bytes32 escrowId = escrow.settle(client, amount, 0, block.timestamp + 3600, nonce, 0, bytes32(0), bytes32(0));
+        bytes32 escrowId = _createEscrow(amount, salt);
 
         uint256 facilitatorBefore = usdc.balanceOf(facilitator);
         uint256 clientBefore = usdc.balanceOf(client);
 
         vm.prank(facilitator);
-        escrow.release(escrowId, amount);
+        escrow.release(escrowId, amount, DEFAULT_TIMEOUT, salt);
 
         assertEq(usdc.balanceOf(facilitator), facilitatorBefore + amount);
         assertEq(usdc.balanceOf(client), clientBefore);
 
-        // Storage cleared after release
         X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
         assertEq(v.client, address(0));
     }
 
-    function test_release_paysCallerNotStoredAddress() public {
-        bytes32 escrowId = _createEscrow(10 * ONE_USDC, "nonce_caller");
+    // ─── release: nonce-binding reverts ──────────────────────
 
-        // Grant FACILITATOR_ROLE to a second facilitator
-        address facilitator2 = address(0xBEE2);
-        vm.prank(admin);
-        escrow.grantRole(FACILITATOR_ROLE, facilitator2);
+    function test_release_reverts_wrongFacilitator() public {
+        bytes32 salt = keccak256("wrong_fac");
+        bytes32 escrowId = _createEscrow(ONE_USDC, salt);
 
-        uint256 f2Before = usdc.balanceOf(facilitator2);
-
-        // facilitator2 calls release — payment should go to facilitator2, not facilitator
-        vm.prank(facilitator2);
-        escrow.release(escrowId, 10 * ONE_USDC);
-
-        assertEq(usdc.balanceOf(facilitator2), f2Before + 10 * ONE_USDC);
+        address attacker = address(0xBAD);
+        vm.prank(attacker);
+        vm.expectRevert(X402Escrow.NotEscrowFacilitator.selector);
+        escrow.release(escrowId, ONE_USDC, DEFAULT_TIMEOUT, salt);
     }
 
-    function test_release_reverts_notFacilitator() public {
-        bytes32 escrowId = _createEscrow(ONE_USDC, "nonce4");
+    function test_release_reverts_wrongSalt() public {
+        bytes32 salt = keccak256("correct_salt");
+        bytes32 wrongSalt = keccak256("wrong_salt");
+        bytes32 escrowId = _createEscrow(ONE_USDC, salt);
 
-        vm.prank(client);
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, client, FACILITATOR_ROLE)
-        );
-        escrow.release(escrowId, ONE_USDC);
+        vm.prank(facilitator);
+        vm.expectRevert(X402Escrow.NotEscrowFacilitator.selector);
+        escrow.release(escrowId, ONE_USDC, DEFAULT_TIMEOUT, wrongSalt);
+    }
+
+    function test_release_reverts_wrongTimeout() public {
+        bytes32 salt = keccak256("wrong_timeout");
+        bytes32 escrowId = _createEscrow(ONE_USDC, salt);
+
+        vm.prank(facilitator);
+        vm.expectRevert(X402Escrow.NotEscrowFacilitator.selector);
+        escrow.release(escrowId, ONE_USDC, DEFAULT_TIMEOUT + 1, salt);
     }
 
     function test_release_reverts_overAmount() public {
-        bytes32 escrowId = _createEscrow(ONE_USDC, "nonce5");
+        bytes32 salt = keccak256("over_amt");
+        bytes32 escrowId = _createEscrow(ONE_USDC, salt);
 
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.InvalidAmount.selector);
-        escrow.release(escrowId, 2 * ONE_USDC);
+        escrow.release(escrowId, 2 * ONE_USDC, DEFAULT_TIMEOUT, salt);
     }
 
     function test_release_reverts_doubleRelease() public {
-        bytes32 escrowId = _createEscrow(ONE_USDC, "nonce6");
+        bytes32 salt = keccak256("double_release");
+        bytes32 escrowId = _createEscrow(ONE_USDC, salt);
 
         vm.prank(facilitator);
-        escrow.release(escrowId, ONE_USDC);
+        escrow.release(escrowId, ONE_USDC, DEFAULT_TIMEOUT, salt);
 
-        // After delete: client=address(0), so EscrowNotFound reverts
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.EscrowNotFound.selector);
-        escrow.release(escrowId, ONE_USDC);
+        escrow.release(escrowId, ONE_USDC, DEFAULT_TIMEOUT, salt);
+    }
+
+    function test_release_reverts_afterTimeout() public {
+        bytes32 salt = keccak256("release_expired");
+        bytes32 escrowId = _createEscrow(ONE_USDC, salt);
+
+        vm.warp(block.timestamp + DEFAULT_TIMEOUT);
+
+        vm.prank(facilitator);
+        vm.expectRevert(X402Escrow.TimeoutExpired.selector);
+        escrow.release(escrowId, ONE_USDC, DEFAULT_TIMEOUT, salt);
     }
 
     // ─── refundAfterTimeout ──────────────────────────────────
 
     function test_refund_reverts_beforeTimeout() public {
-        bytes32 escrowId = _createEscrow(5 * ONE_USDC, "nonce7");
+        bytes32 salt = keccak256("refund_early");
+        bytes32 escrowId = _createEscrow(5 * ONE_USDC, salt);
 
         vm.prank(client);
         vm.expectRevert(X402Escrow.TimeoutNotReached.selector);
@@ -356,38 +478,31 @@ contract X402EscrowTest is Test {
 
     function test_refund_succeeds_afterTimeout() public {
         uint256 amount = 5 * ONE_USDC;
-        bytes32 escrowId = _createEscrow(amount, "nonce8");
+        bytes32 salt = keccak256("refund_ok");
+        bytes32 escrowId = _createEscrow(amount, salt);
 
         uint256 clientBefore = usdc.balanceOf(client);
 
-        vm.warp(block.timestamp + 5401);
+        vm.warp(block.timestamp + DEFAULT_TIMEOUT + 1);
 
         vm.prank(client);
         escrow.refundAfterTimeout(escrowId);
 
         assertEq(usdc.balanceOf(client), clientBefore + amount);
 
-        // Storage cleared after refund
         X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
         assertEq(v.client, address(0));
         assertEq(v.amount, 0);
     }
 
-    function test_refund_notAffectedByTimeoutChange() public {
-        // Create escrow with default 5400s timeout → refundAt = now + 5400
+    function test_refund_usesPerEscrowTimeout() public {
         uint256 amount = 5 * ONE_USDC;
-        bytes32 escrowId = _createEscrow(amount, "nonce_noretro");
+        bytes32 salt = keccak256("per_escrow_timeout");
+        bytes32 escrowId = _createEscrowWithTimeout(amount, salt, 600);
 
-        // Admin increases timeout to 86400s — should NOT affect existing escrow
-        vm.prank(admin);
-        escrow.setTimeout(86400);
+        vm.warp(block.timestamp + 601);
 
         uint256 clientBefore = usdc.balanceOf(client);
-
-        // Warp past original 5400s deadline
-        vm.warp(block.timestamp + 5401);
-
-        // Client can still refund using original deadline
         vm.prank(client);
         escrow.refundAfterTimeout(escrowId);
 
@@ -396,12 +511,12 @@ contract X402EscrowTest is Test {
 
     function test_refund_callableByAnyone() public {
         uint256 amount = 5 * ONE_USDC;
-        bytes32 escrowId = _createEscrow(amount, "nonce9");
+        bytes32 salt = keccak256("anyone_refund");
+        bytes32 escrowId = _createEscrow(amount, salt);
         uint256 clientBefore = usdc.balanceOf(client);
 
-        vm.warp(block.timestamp + 5401);
+        vm.warp(block.timestamp + DEFAULT_TIMEOUT + 1);
 
-        // Random address triggers refund — funds go to client, not caller
         address anyone = address(0xAAAA);
         vm.prank(anyone);
         escrow.refundAfterTimeout(escrowId);
@@ -411,103 +526,36 @@ contract X402EscrowTest is Test {
     }
 
     function test_refund_reverts_alreadyReleased() public {
-        bytes32 escrowId = _createEscrow(ONE_USDC, "nonce10");
+        bytes32 salt = keccak256("already_released");
+        bytes32 escrowId = _createEscrow(ONE_USDC, salt);
 
         vm.prank(facilitator);
-        escrow.release(escrowId, ONE_USDC);
+        escrow.release(escrowId, ONE_USDC, DEFAULT_TIMEOUT, salt);
 
-        vm.warp(block.timestamp + 5401);
+        vm.warp(block.timestamp + DEFAULT_TIMEOUT + 1);
 
-        // After delete: client=address(0), so EscrowNotFound
         vm.prank(client);
         vm.expectRevert(X402Escrow.EscrowNotFound.selector);
         escrow.refundAfterTimeout(escrowId);
     }
 
-    // ─── setTimeout ──────────────────────────────────────────
-
-    function test_setTimeout_success() public {
-        vm.prank(admin);
-        escrow.setTimeout(600);
-        assertEq(escrow.timeoutSecs(), 600);
-    }
-
-    function test_setTimeout_reverts_notAdmin() public {
-        vm.prank(client);
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, client, DEFAULT_ADMIN_ROLE)
-        );
-        escrow.setTimeout(600);
-    }
-
-    function test_setTimeout_reverts_tooLow() public {
-        vm.prank(admin);
-        vm.expectRevert(X402Escrow.InvalidTimeout.selector);
-        escrow.setTimeout(299);
-    }
-
-    function test_setTimeout_reverts_tooHigh() public {
-        vm.prank(admin);
-        vm.expectRevert(X402Escrow.InvalidTimeout.selector);
-        escrow.setTimeout(86401);
-    }
-
-    function test_setTimeout_boundary_min() public {
-        vm.prank(admin);
-        escrow.setTimeout(300);
-        assertEq(escrow.timeoutSecs(), 300);
-    }
-
-    function test_setTimeout_boundary_max() public {
-        vm.prank(admin);
-        escrow.setTimeout(86400);
-        assertEq(escrow.timeoutSecs(), 86400);
-    }
-
-    // ─── admin role transfer ─────────────────────────────────
-
-    function test_adminRole_grantAndRevoke() public {
-        address newAdmin = address(0xAD02);
-
-        vm.startPrank(admin);
-        escrow.grantRole(DEFAULT_ADMIN_ROLE, newAdmin);
-        escrow.revokeRole(DEFAULT_ADMIN_ROLE, admin);
-        vm.stopPrank();
-
-        vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, admin, DEFAULT_ADMIN_ROLE)
-        );
-        escrow.setTimeout(600);
-
-        vm.prank(newAdmin);
-        escrow.setTimeout(600);
-    }
-
-    function test_grantRole_reverts_notAdmin() public {
-        vm.prank(client);
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, client, DEFAULT_ADMIN_ROLE)
-        );
-        escrow.grantRole(DEFAULT_ADMIN_ROLE, client);
-    }
-
     // ─── getEscrow (EscrowView) ──────────────────────────────
 
     function test_getEscrow_timeUntilRefund() public {
-        bytes32 escrowId = _createEscrow(ONE_USDC, "nonce11");
+        bytes32 salt = keccak256("view_test");
+        bytes32 escrowId = _createEscrow(ONE_USDC, salt);
 
         X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
-        assertEq(v.timeUntilRefund, 5400);
-        assertEq(v.refundAt, block.timestamp + 5400);
+        assertEq(v.timeUntilRefund, DEFAULT_TIMEOUT);
+        assertEq(v.refundAt, block.timestamp + DEFAULT_TIMEOUT);
         assertFalse(v.canRefund);
 
-        vm.warp(block.timestamp + 2700);
+        vm.warp(block.timestamp + DEFAULT_TIMEOUT / 2);
         v = escrow.getEscrow(escrowId);
-        assertEq(v.timeUntilRefund, 2700);
+        assertEq(v.timeUntilRefund, DEFAULT_TIMEOUT / 2);
         assertFalse(v.canRefund);
 
-        vm.warp(block.timestamp + 2700);
+        vm.warp(block.timestamp + DEFAULT_TIMEOUT / 2);
         v = escrow.getEscrow(escrowId);
         assertEq(v.timeUntilRefund, 0);
         assertTrue(v.canRefund);
@@ -516,92 +564,68 @@ contract X402EscrowTest is Test {
     // ─── UUPS upgrade ────────────────────────────────────────
 
     function test_upgrade_byOwner() public {
-        // Create an escrow before upgrade to verify state persists
-        bytes32 escrowId = _createEscrow(5 * ONE_USDC, "nonce_upgrade");
+        bytes32 salt = keccak256("upgrade_test");
+        bytes32 escrowId = _createEscrow(5 * ONE_USDC, salt);
 
-        // Deploy V2 and upgrade
-        X402EscrowV2 implV2 = new X402EscrowV2();
+        X402EscrowV3Mock implV3 = new X402EscrowV3Mock();
 
         vm.prank(owner);
-        escrow.upgradeToAndCall(address(implV2), "");
+        escrow.upgradeToAndCall(address(implV3), "");
 
-        // State persists through upgrade
         X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
         assertEq(v.amount, 5 * ONE_USDC);
         assertEq(v.client, client);
 
-        // New V2 function is accessible
-        assertEq(X402EscrowV2(address(escrow)).version(), 2);
+        assertEq(X402EscrowV3Mock(address(escrow)).v3Version(), 3);
     }
 
     function test_upgrade_reverts_notOwner() public {
-        X402EscrowV2 implV2 = new X402EscrowV2();
+        X402EscrowV3Mock implV3 = new X402EscrowV3Mock();
 
-        vm.prank(admin); // admin != owner
+        vm.prank(facilitator);
         vm.expectRevert();
-        escrow.upgradeToAndCall(address(implV2), "");
+        escrow.upgradeToAndCall(address(implV3), "");
 
         vm.prank(client);
         vm.expectRevert();
-        escrow.upgradeToAndCall(address(implV2), "");
+        escrow.upgradeToAndCall(address(implV3), "");
     }
 
     function test_ownerTransfer_twoStep() public {
         address newOwner = address(0x9999);
 
-        // Step 1: current owner initiates transfer
         vm.prank(owner);
         escrow.transferOwnership(newOwner);
-
-        // Owner hasn't changed yet (pending)
         assertEq(escrow.owner(), owner);
 
-        // Step 2: new owner accepts
         vm.prank(newOwner);
         escrow.acceptOwnership();
-
         assertEq(escrow.owner(), newOwner);
 
-        // Old owner can no longer upgrade
-        X402EscrowV2 implV2 = new X402EscrowV2();
+        X402EscrowV3Mock implV3 = new X402EscrowV3Mock();
         vm.prank(owner);
         vm.expectRevert();
-        escrow.upgradeToAndCall(address(implV2), "");
+        escrow.upgradeToAndCall(address(implV3), "");
 
-        // New owner can
         vm.prank(newOwner);
-        escrow.upgradeToAndCall(address(implV2), "");
+        escrow.upgradeToAndCall(address(implV3), "");
     }
 
-    // ─── rescueTokens ─────────────────────────────────────────
+    // ─── V2 constants ────────────────────────────────────────
 
-    function test_rescueTokens_success() public {
-        // Simulate stuck tokens (e.g. from frontrun griefing)
-        usdc.mint(address(escrow), 5 * ONE_USDC);
-
-        uint256 clientBefore = usdc.balanceOf(client);
-
-        vm.prank(admin);
-        escrow.rescueTokens(address(usdc), client, 5 * ONE_USDC);
-
-        assertEq(usdc.balanceOf(client), clientBefore + 5 * ONE_USDC);
+    function test_version() public view {
+        assertEq(escrow.VERSION(), 2);
     }
 
-    function test_rescueTokens_reverts_notAdmin() public {
-        usdc.mint(address(escrow), ONE_USDC);
-
-        vm.prank(client);
-        vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, client, DEFAULT_ADMIN_ROLE)
-        );
-        escrow.rescueTokens(address(usdc), client, ONE_USDC);
+    function test_nonceTag() public view {
+        assertEq(escrow.NONCE_TAG(), keccak256("X402_ESCROW_FACILITATOR_NONCE_V1"));
     }
 
-    // ─── helpers ─────────────────────────────────────────────
+    function test_minTimeout() public view {
+        assertEq(escrow.MIN_TIMEOUT(), 300);
+    }
 
-    function _createEscrow(uint256 amount, bytes memory nonceSeed) internal returns (bytes32) {
-        bytes32 nonce = keccak256(nonceSeed);
-        vm.prank(facilitator);
-        return escrow.settle(client, amount, 0, block.timestamp + 3600, nonce, 0, bytes32(0), bytes32(0));
+    function test_maxTimeout() public view {
+        assertEq(escrow.MAX_TIMEOUT(), 172_800);
     }
 }

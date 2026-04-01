@@ -10,10 +10,11 @@ This repository focuses solely on `X402Escrow`: settlement, release, timeout ref
 
 `X402Escrow` is designed for facilitator-driven MCP billing:
 
-1. Client signs EIP-3009 authorization off-chain.
-2. The facilitator calls `settle(...)` to pull USDC into escrow.
-3. The facilitator calls `release(escrowId, facilitatorAmount)` after the request is completed.
-4. If the release never happens, anyone can call `refundAfterTimeout(escrowId)` and funds return to the client.
+1. Facilitator chooses `refundTimeoutSecs`, generates random `salt`, and computes nonce-binding.
+2. Client signs EIP-3009 authorization off-chain (`ReceiveWithAuthorization`) with that nonce.
+3. Facilitator calls `settle(...)` to pull USDC into escrow.
+4. The same facilitator calls `release(escrowId, facilitatorAmount, refundTimeoutSecs, salt)` after the request is completed.
+5. If release never happens, anyone can call `refundAfterTimeout(escrowId)` and funds return to the client.
 
 ## Why Escrow Extension for x402
 
@@ -32,15 +33,18 @@ Standard x402 is excellent for fixed-price endpoints, but inference workloads ar
 ## Key Design Decisions
 
 - `receiveWithAuthorization` (EIP-3009): the authorization targets the escrow contract, reducing mempool signature misuse risk.
+- Permissionless settle/release with cryptographic binding: facilitator identity is proven via nonce reconstruction, not roles.
+- Nonce-binding formula: `nonce = keccak256(TAG, chainId, escrowAddress, facilitatorAddress, refundTimeoutSecs, salt)`.
 - Packed escrow storage: each escrow uses a compact, single-slot layout for gas efficiency.
-- Stateless facilitator payout: `release` pays `msg.sender` with `FACILITATOR_ROLE`, avoiding per-escrow facilitator address coupling.
-- Per-escrow timeout: each escrow stores its own `refundAt`; changing the global timeout does not rewrite existing deadlines.
+- Per-escrow timeout: each escrow stores its own `refundAt`; no mutable global timeout state for active escrows.
 - Permissionless timeout refund: anyone can call `refundAfterTimeout`, funds always return to the original client.
+- Owner-only upgrade authority (UUPS), no `AccessControl` role management in V2.
 
 ## Security Properties
 
-- Client protection: funds remain in escrow until the settlement logic executes.
-- Facilitator/service protection: settlement starts from funds that are already locked.
+- Client protection: funds remain in escrow until settlement logic executes.
+- Facilitator/service protection: release is restricted to the facilitator bound at settle time.
+- Anti-front-run binding: a different caller cannot reuse the same signed authorization for settle/release.
 - Liveness: timeout refunds remain available even if off-chain actors are unavailable.
 - Reentrancy hardening: state-changing transfer flows are protected by `nonReentrant`.
 
@@ -49,8 +53,8 @@ Standard x402 is excellent for fixed-price endpoints, but inference workloads ar
 This contract is an x402-compatible extension:
 
 - Server still responds with HTTP `402 Payment Required`.
-- Payment requirements include escrow parameters for signed authorization.
-- The client flow remains x402-shaped while the settlement path is escrow-backed.
+- Client still signs standard EIP-3009 authorization payload.
+- The protocol adds nonce derivation conventions for facilitator binding while preserving x402 flow shape.
 
 ## Complementary to ERC-8183
 
@@ -65,17 +69,15 @@ They are complementary: a task-level commerce flow can use ERC-8183 while metere
 
 - `owner`:
   can upgrade proxy implementation (`UUPSUpgradeable`), uses 2-step ownership transfer.
-- `DEFAULT_ADMIN_ROLE`:
-  can grant/revoke roles, change timeout, rescue tokens.
-- `FACILITATOR_ROLE`:
-  can call `settle` and `release`.
+- `facilitator`:
+  no on-chain role in V2; any address can call settle/release only if cryptographically bound by nonce.
 
 ## Repository Layout
 
 - `src/X402Escrow.sol` – escrow contract.
 - `test/X402Escrow.t.sol` – unit tests (including proxy upgrade tests).
 - `.gas-snapshot` – committed gas baseline for regression checks.
-- `script/DeployX402Escrow.s.sol` – implementation + proxy deploy script.
+- `script/DeployX402Escrow.s.sol` – implementation + proxy deploy/upgrade script.
 - `.env.example` – deployment environment template.
 
 ## Quick Start
@@ -103,10 +105,17 @@ forge snapshot --offline --match-path test/X402Escrow.t.sol
 
 ```bash
 cp .env.example .env
-# fill PRIVATE_KEY, USDC_ADDRESS, FACILITATOR_ADDRESS, ADMIN_ADDRESS, OWNER_ADDRESS
+# fill PRIVATE_KEY, USDC_ADDRESS, OWNER_ADDRESS
 source .env
 
-# Base Sepolia
+# Base Sepolia (fresh deploy)
+forge script script/DeployX402Escrow.s.sol --rpc-url base_sepolia --broadcast
+```
+
+Upgrade existing proxy in place:
+
+```bash
+ESCROW_PROXY_ADDRESS=0xYourProxy \
 forge script script/DeployX402Escrow.s.sol --rpc-url base_sepolia --broadcast
 ```
 
@@ -114,11 +123,9 @@ You can also use `--rpc-url base`, `--rpc-url monad`, or `--rpc-url monad_testne
 
 ## Main Functions
 
-- `settle(...)` – lock client USDC via EIP-3009 `receiveWithAuthorization`.
-- `release(escrowId, facilitatorAmount)` – split escrow amount between facilitator and client.
+- `settle(...)` – lock client USDC via EIP-3009 `receiveWithAuthorization` and bind facilitator via nonce.
+- `release(escrowId, facilitatorAmount, refundTimeoutSecs, salt)` – split escrow amount between facilitator and client.
 - `refundAfterTimeout(escrowId)` – timeout safety refund to the client.
-- `setTimeout(timeoutSecs)` – admin timeout control for new escrows.
-- `rescueTokens(token, to, amount)` – admin rescue hook.
 - `getEscrow(escrowId)` – returns enriched escrow view (`EscrowView`).
 
 ## Security Notes
@@ -126,6 +133,7 @@ You can also use `--rpc-url base`, `--rpc-url monad`, or `--rpc-url monad_testne
 - Contract uses `nonReentrant` on state-changing financial paths.
 - Escrow storage is deleted before token transfers in release/refund.
 - `settle` validates exact token delta to block fee-on-transfer behavior.
+- `release` verifies caller binding via nonce reconstruction.
 - Upgrade authorization is owner-only (`_authorizeUpgrade`).
 
 ## Open Source Docs
