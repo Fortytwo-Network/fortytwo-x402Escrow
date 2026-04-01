@@ -52,12 +52,7 @@ interface IERC3009 {
 ///   - Owner (Ownable2StepUpgradeable): can upgrade the contract (UUPS). Two-step transfer.
 ///
 /// Token: USDC on Base (6 decimals). Uses SafeERC20 for transfer safety.
-contract X402Escrow is
-    Initializable,
-    UUPSUpgradeable,
-    Ownable2StepUpgradeable,
-    ReentrancyGuard
-{
+contract X402Escrow is Initializable, UUPSUpgradeable, Ownable2StepUpgradeable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Contract version for upgrade tracking.
@@ -198,18 +193,14 @@ contract X402Escrow is
         // Pull USDC and verify no fee-on-transfer
         {
             uint256 balBefore = IERC20(usdc).balanceOf(address(this));
-            IERC3009(usdc).receiveWithAuthorization(
-                client, address(this), maxAmount, validAfter, validBefore, nonce, v, r, s
-            );
+            IERC3009(usdc)
+                .receiveWithAuthorization(client, address(this), maxAmount, validAfter, validBefore, nonce, v, r, s);
             if (IERC20(usdc).balanceOf(address(this)) - balBefore != maxAmount) revert TransferMismatch();
         }
 
         // Both casts are safe: refundTimeoutSecs <= MAX_TIMEOUT, maxAmount <= type(uint56).max
-        activeEscrows[escrowId] = Escrow({
-            client: client,
-            refundAt: uint40(block.timestamp + refundTimeoutSecs),
-            amount: uint56(maxAmount)
-        });
+        activeEscrows[escrowId] =
+            Escrow({client: client, refundAt: uint40(block.timestamp + refundTimeoutSecs), amount: uint56(maxAmount)});
 
         emit Deposited(escrowId, client, maxAmount);
     }

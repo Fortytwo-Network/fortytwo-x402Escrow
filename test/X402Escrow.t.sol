@@ -120,9 +120,7 @@ contract X402EscrowTest is Test {
     function _createEscrowWithTimeout(uint256 amount, bytes32 salt, uint256 timeout) internal returns (bytes32) {
         bytes32 nonce = _computeNonce(facilitator, timeout, salt);
         vm.prank(facilitator);
-        return escrow.settle(
-            client, amount, 0, block.timestamp + 7200, timeout, nonce, salt, 0, bytes32(0), bytes32(0)
-        );
+        return escrow.settle(client, amount, 0, block.timestamp + 7200, timeout, nonce, salt, 0, bytes32(0), bytes32(0));
     }
 
     // ─── initialize ─────────────────────────────────────────
@@ -241,9 +239,7 @@ contract X402EscrowTest is Test {
 
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.InvalidTimeout.selector);
-        escrow.settle(
-            client, ONE_USDC, 0, block.timestamp + 3600, tooLow, nonce, salt, 0, bytes32(0), bytes32(0)
-        );
+        escrow.settle(client, ONE_USDC, 0, block.timestamp + 3600, tooLow, nonce, salt, 0, bytes32(0), bytes32(0));
     }
 
     function test_settle_reverts_timeoutTooHigh() public {
@@ -253,9 +249,7 @@ contract X402EscrowTest is Test {
 
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.InvalidTimeout.selector);
-        escrow.settle(
-            client, ONE_USDC, 0, block.timestamp + 3600, tooHigh, nonce, salt, 0, bytes32(0), bytes32(0)
-        );
+        escrow.settle(client, ONE_USDC, 0, block.timestamp + 3600, tooHigh, nonce, salt, 0, bytes32(0), bytes32(0));
     }
 
     function test_settle_timeoutAtMaxBoundary() public {
@@ -263,9 +257,8 @@ contract X402EscrowTest is Test {
         bytes32 nonce = _computeNonce(facilitator, 172_800, salt);
 
         vm.prank(facilitator);
-        bytes32 escrowId = escrow.settle(
-            client, ONE_USDC, 0, block.timestamp + 3600, 172_800, nonce, salt, 0, bytes32(0), bytes32(0)
-        );
+        bytes32 escrowId =
+            escrow.settle(client, ONE_USDC, 0, block.timestamp + 3600, 172_800, nonce, salt, 0, bytes32(0), bytes32(0));
 
         X402Escrow.EscrowView memory v = escrow.getEscrow(escrowId);
         assertEq(v.refundAt, block.timestamp + 172_800);
@@ -279,9 +272,7 @@ contract X402EscrowTest is Test {
 
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.InvalidAmount.selector);
-        escrow.settle(
-            client, 0, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
-        );
+        escrow.settle(client, 0, 0, block.timestamp + 3600, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0));
     }
 
     function test_settle_reverts_expired() public {
@@ -290,9 +281,7 @@ contract X402EscrowTest is Test {
 
         vm.prank(facilitator);
         vm.expectRevert(X402Escrow.TimeoutExpired.selector);
-        escrow.settle(
-            client, ONE_USDC, 0, block.timestamp - 1, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0)
-        );
+        escrow.settle(client, ONE_USDC, 0, block.timestamp - 1, DEFAULT_TIMEOUT, nonce, salt, 0, bytes32(0), bytes32(0));
     }
 
     function test_settle_reverts_notYetValid() public {
