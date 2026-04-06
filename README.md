@@ -1,4 +1,9 @@
-# fortytwo-x402Escrow
+# Fortytwo x402Escrow
+
+[![Website fortytwo.network](https://img.shields.io/website-up-down-green-red/https/fortytwo.network.svg)](https://fortytwo.network)
+[![Docs](https://img.shields.io/badge/docs-up-green)](https://docs.fortytwo.network/docs/x402escrow-overview)
+[![Discord](https://img.shields.io/badge/discord-join-7289da)](https://discord.gg/fortytwo)
+[![Twitter Fortytwo](https://img.shields.io/twitter/follow/fortytwo?style=social)](https://x.com/fortytwo)
 
 ## Overview
 
