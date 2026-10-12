@@ -9,7 +9,7 @@ Security fixes are applied to the latest `main` branch.
 Please do not open public issues for security vulnerabilities.
 
 Send details privately to:
-- `aivashov@fortytwo.network`
+- `security@fortytwo.network`
 
 Include:
 

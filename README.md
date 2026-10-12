@@ -1,9 +1,8 @@
 # Fortytwo x402Escrow
 
 [![Website fortytwo.network](https://img.shields.io/website-up-down-green-red/https/fortytwo.network.svg)](https://fortytwo.network)
-[![Docs](https://img.shields.io/badge/docs-up-green)](https://docs.fortytwo.network/docs/x402escrow-overview)
 [![Discord](https://img.shields.io/badge/discord-join-7289da)](https://discord.gg/fortytwo)
-[![Twitter Fortytwo](https://img.shields.io/twitter/follow/fortytwo?style=social)](https://x.com/fortytwo)
+[![X Fortytwo](https://img.shields.io/twitter/follow/fortytwonetwork?style=social)](https://x.com/fortytwonetwork)
 
 ## Overview
 
@@ -13,7 +12,7 @@ This repository focuses solely on `X402Escrow`: settlement, release, timeout ref
 
 ## Contract Overview
 
-`X402Escrow` is designed for facilitator-driven MCP billing:
+`X402Escrow` is designed for facilitator-driven, usage-based billing:
 
 1. Client signs EIP-3009 authorization off-chain.
 2. The facilitator calls `settle(...)` to pull USDC into escrow.
