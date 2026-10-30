@@ -9,7 +9,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {Ownable2StepUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
-/// @dev EIP-3009 receiveWithAuthorization — USDC-specific, not in OpenZeppelin.
+/// @dev EIP-3009 receiveWithAuthorization â€” USDC-specific, not in OpenZeppelin.
 /// Uses receiveWithAuthorization (not transferWithAuthorization) so that only this contract
 /// (msg.sender == to) can execute the transfer, preventing frontrun griefing by MEV bots.
 /// The client must sign the ReceiveWithAuthorization typehash (not TransferWithAuthorization).
@@ -32,7 +32,7 @@ interface IERC3009 {
 /// @author Aleksei Ivashov (aivashov@fortytwo.network)
 /// @notice UUPS-upgradeable escrow for the x402 (HTTP 402) payment pattern for swarm MCP services.
 ///
-/// @dev Upgrade notes (V1 → V2):
+/// @dev Upgrade notes (V1 â†’ V2):
 ///   The Escrow struct stores `refundAt` (uint40) directly instead of computing it from a global
 ///   `timeoutSecs`. If a future version changes the struct layout, a storage-migration function
 ///   must be included in V2's initializer to convert any active escrows. As long as the struct
@@ -40,8 +40,8 @@ interface IERC3009 {
 ///
 /// Flow:
 ///   1. Client signs an EIP-3009 authorization off-chain (approve max spend).
-///   2. Facilitator calls settle() — pulls USDC from client into escrow via receiveWithAuthorization.
-///   3. After swarm MCP request completes, facilitator calls release() — splits USDC between
+///   2. Facilitator calls settle() â€” pulls USDC from client into escrow via receiveWithAuthorization.
+///   3. After swarm MCP request completes, facilitator calls release() â€” splits USDC between
 ///      facilitator (msg.sender, actual cost) and client (unused remainder).
 ///   4. If the facilitator never calls release(), client can self-refund after timeout via refundAfterTimeout().
 ///
@@ -79,9 +79,9 @@ contract X402Escrow is
     ///      refundAt is set at settle time: block.timestamp + timeoutSecs. Changes to timeoutSecs
     ///      do not affect existing escrows.
     struct Escrow {
-        address client; // 20 bytes — who deposited USDC
-        uint40 refundAt; // 5 bytes  — timestamp after which client can self-refund
-        uint56 amount; // 7 bytes  — total USDC locked (6 decimals, max ~72B USDC)
+        address client; // 20 bytes â€” who deposited USDC
+        uint40 refundAt; // 5 bytes  â€” timestamp after which client can self-refund
+        uint56 amount; // 7 bytes  â€” total USDC locked (6 decimals, max ~72B USDC)
     }
 
     /// @notice View-only struct returned by getEscrow(). Uses full-width types for convenience.
@@ -97,14 +97,14 @@ contract X402Escrow is
     /// Entries are deleted on release or refund.
     mapping(bytes32 => Escrow) public activeEscrows;
 
-    // ─── Events ──────────────────────────────────────────────
+    // â”€â”€â”€ Events â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     event Deposited(bytes32 indexed escrowId, address indexed client, uint256 amount);
     event Released(bytes32 indexed escrowId, address indexed facilitator, uint256 toFacilitator, uint256 toClient);
     event Refunded(bytes32 indexed escrowId, address indexed client, uint256 amount);
     event TimeoutUpdated(uint256 newTimeoutSecs);
 
-    // ─── Errors ──────────────────────────────────────────────
+    // â”€â”€â”€ Errors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     error ZeroAddress(); // address(0) passed to initialize()
     error NotContract(); // _usdc is not a contract (EOA or empty address)
@@ -116,8 +116,9 @@ contract X402Escrow is
     error InvalidAmount(); // zero amount or facilitatorAmount > escrow amount
     error InvalidTimeout(); // timeout outside [300, 86400] range
     error TransferMismatch(); // actual USDC received != expected (fee-on-transfer protection)
+    error ProtectedToken(); // active escrow assets cannot be rescued by an admin
 
-    // ─── Initializer (replaces constructor for UUPS proxy) ───
+    // â”€â”€â”€ Initializer (replaces constructor for UUPS proxy) â”€â”€â”€
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -147,12 +148,12 @@ contract X402Escrow is
         _grantRole(FACILITATOR_ROLE, _facilitator);
     }
 
-    // ─── UUPS upgrade authorization ─────────────────────────
+    // â”€â”€â”€ UUPS upgrade authorization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// @dev Only the owner can authorize contract upgrades.
     function _authorizeUpgrade(address) internal override onlyOwner {}
 
-    // ─── Admin ───────────────────────────────────────────────
+    // â”€â”€â”€ Admin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// @notice Update the timeout window for client self-refund.
     /// @dev Only affects new escrows. Existing escrows keep their refundAt deadline.
@@ -163,16 +164,22 @@ contract X402Escrow is
         emit TimeoutUpdated(_timeoutSecs);
     }
 
-    /// @notice Temporary (pre-audit) method to rescue tokens stuck in the contract (e.g. from EIP-3009 frontrun griefing).
-    /// @dev Only callable by admin. Use with caution — verify the tokens are truly unowned.
+    /// @notice Rescue unrelated tokens accidentally sent to this contract.
+    /// @dev The escrow token is always protected, including after an upgrade with active deposits.
     /// @param token  ERC-20 token address to rescue.
     /// @param to     Recipient address.
     /// @param amount Amount to transfer.
-    function rescueTokens(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function rescueTokens(address token, address to, uint256 amount)
+        external
+        nonReentrant
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (token == usdc) revert ProtectedToken();
+        if (to == address(0)) revert ZeroAddress();
         IERC20(token).safeTransfer(to, amount);
     }
 
-    // ─── Core: settle → release / refund ─────────────────────
+    // â”€â”€â”€ Core: settle â†’ release / refund â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// @notice Pull USDC from client into escrow using EIP-3009 signed authorization.
     /// @dev Called by the facilitator when it receives an HTTP 402 payment header from the client.
@@ -193,7 +200,7 @@ contract X402Escrow is
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external onlyRole(FACILITATOR_ROLE) nonReentrant returns (bytes32 escrowId) {
+    ) external nonReentrant onlyRole(FACILITATOR_ROLE) returns (bytes32 escrowId) {
         if (maxAmount == 0 || maxAmount > type(uint56).max) revert InvalidAmount();
         if (block.timestamp < validAfter) revert NotYetValid();
         if (block.timestamp >= validBefore) revert TimeoutExpired();
@@ -204,7 +211,7 @@ contract X402Escrow is
         // Check balance before/after to guard against fee-on-transfer tokens
         uint256 balBefore = IERC20(usdc).balanceOf(address(this));
 
-        // Pull USDC from client → this contract via EIP-3009 (receiveWithAuthorization: msg.sender == to)
+        // Pull USDC from client â†’ this contract via EIP-3009 (receiveWithAuthorization: msg.sender == to)
         IERC3009(usdc)
             .receiveWithAuthorization(client, address(this), maxAmount, validAfter, validBefore, nonce, v, r, s);
 
@@ -229,7 +236,7 @@ contract X402Escrow is
     /// @param escrowId          The escrow to release.
     /// @param facilitatorAmount USDC to send to facilitator (actual cost). Remainder goes back to client.
     ///                          Can be 0 (full refund) up to esc.amount (full payment).
-    function release(bytes32 escrowId, uint256 facilitatorAmount) external onlyRole(FACILITATOR_ROLE) nonReentrant {
+    function release(bytes32 escrowId, uint256 facilitatorAmount) external nonReentrant onlyRole(FACILITATOR_ROLE) {
         Escrow memory esc = activeEscrows[escrowId];
         if (esc.client == address(0)) revert EscrowNotFound();
         if (facilitatorAmount > esc.amount) revert InvalidAmount();
@@ -250,7 +257,7 @@ contract X402Escrow is
     /// @notice Refund escrowed funds to client after timeout. Callable by anyone.
     /// @dev Safety net: if facilitator goes offline or never calls release(), client isn't stuck.
     ///      Anyone can trigger this (funds always go to esc.client), enabling gasless refunds via relayers.
-    ///      Uses the refundAt deadline stored at settle time — not affected by later setTimeout() calls.
+    ///      Uses the refundAt deadline stored at settle time â€” not affected by later setTimeout() calls.
     /// @param escrowId The escrow to refund.
     function refundAfterTimeout(bytes32 escrowId) external nonReentrant {
         Escrow memory esc = activeEscrows[escrowId];
@@ -265,7 +272,7 @@ contract X402Escrow is
         emit Refunded(escrowId, esc.client, esc.amount);
     }
 
-    // ─── Views ───────────────────────────────────────────────
+    // â”€â”€â”€ Views â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// @notice Get full escrow info as a single struct.
     function getEscrow(bytes32 escrowId) external view returns (EscrowView memory) {
